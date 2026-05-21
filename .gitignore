@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.db
+*.sqlite3
+*.csv
+*.log
+.env
+*.key
+*.pem
+.idea/
+.vscode/
+*.swp
+*.swo
+docker-compose.override.yml
