@@ -1,14 +1,7 @@
-# Stage 1: Build
-FROM python:3.11-slim as builder
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --user --no-cache-dir -r requirements.txt
-
-# Stage 2: Runtime
 FROM python:3.11-slim
 WORKDIR /app
-COPY --from=builder /root/.local /root/.local
-COPY main.py .
-ENV PATH=/root/.local/bin:$PATH
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
 EXPOSE 10000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
