@@ -1,0 +1,35 @@
+name: Lead Agent — пошук лідів
+
+on:
+  schedule:
+    - cron: "0 6,12,18 * * *"   # запуск о 6:00, 12:00, 18:00 UTC (9, 15, 21 за Києвом)
+  workflow_dispatch:              # також можна запустити вручну з GitHub
+
+jobs:
+  search-leads:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout репозиторію
+        uses: actions/checkout@v4
+
+      - name: Налаштування Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Встановлення залежностей
+        run: |
+          pip install requests feedparser googlesearch-python
+
+      - name: Запуск агента
+        env:
+          API_URL: ${{ secrets.API_URL }}
+        run: python agent.py
+
+      - name: Зберегти кеш seen_leads.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: seen-leads-cache
+          path: seen_leads.json
+          retention-days: 30

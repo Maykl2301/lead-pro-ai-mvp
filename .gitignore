@@ -14,3 +14,6 @@ venv/
 *.swp
 *.swo
 docker-compose.override.yml
+seen_leads.json
+*.db-shm
+*.db-wal
