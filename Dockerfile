@@ -10,5 +10,5 @@ WORKDIR /app
 COPY --from=builder /root/.local /root/.local
 COPY main.py .
 ENV PATH=/root/.local/bin:$PATH
-EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 10000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
