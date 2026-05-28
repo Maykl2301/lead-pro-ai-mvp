@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.security import HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, EmailStr, Field, validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
@@ -159,7 +159,8 @@ class LeadIn(BaseModel):
     msg:      str      = Field(..., min_length=5, max_length=500)
     source:   str      = Field("form")
 
-    @validator("name")
+    @field_validator("name")
+    @classmethod
     def fmt_name(cls, v):
         return v.strip().title()
 
