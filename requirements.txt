@@ -1,6 +1,6 @@
-fastapi==0.109.2
-uvicorn==0.27.1
-pydantic[email]==2.6.1
+fastapi==0.103.2
+uvicorn==0.23.2
+pydantic[email]==1.10.13
 sqlalchemy==2.0.27
 passlib==1.7.4
 bcrypt==4.0.1
@@ -10,3 +10,4 @@ feedparser==6.0.11
 googlesearch-python==1.2.3
 python-multipart==0.0.9
 cryptography==41.0.7
+email-validator==2.1.0
