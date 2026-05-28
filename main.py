@@ -160,7 +160,6 @@ class LeadIn(BaseModel):
     source:   str      = Field("form")
 
     @validator("name")
-
     def fmt_name(cls, v):
         return v.strip().title()
 
