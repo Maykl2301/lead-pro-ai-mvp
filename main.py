@@ -6,35 +6,22 @@ from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.security import HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 
-# ── Базові налаштування ──────────────────────────────────────────────────────
-BASE = Path(__file__).parent.resolve()
-
-# БАГ ВИПРАВЛЕНО: log визначено ДО використання
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("lead-pro")
 
-# БАГ ВИПРАВЛЕНО: падаємо одразу якщо секрет не задано
-SECRET = os.getenv("APP_SECRET")
-if not SECRET:
-    log.warning("⚠️  APP_SECRET не задано — використовується дефолт (небезпечно для продакшну)")
-    SECRET = "dev-only-secret"
-
-TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TG_CHAT  = os.getenv("TELEGRAM_CHAT_ID")
+BASE   = Path(__file__).parent.resolve()
+SECRET = os.getenv("APP_SECRET", "dev-secret-change-me")
+TG_TOKEN  = os.getenv("TELEGRAM_BOT_TOKEN")
+TG_CHAT   = os.getenv("TELEGRAM_CHAT_ID")
 ADMIN_HASH = os.getenv("ADMIN_PASS_HASH", "")
 
-# Валідація Telegram конфігу
-if TG_CHAT and not str(TG_CHAT).lstrip("-").isdigit():
-    log.warning(f"⚠️  Невалідний TELEGRAM_CHAT_ID: {TG_CHAT} (має бути числом)")
-
-# ── База даних ───────────────────────────────────────────────────────────────
 engine = create_engine(
     "sqlite:///{}/leads.db".format(BASE),
     connect_args={"check_same_thread": False, "timeout": 10}
@@ -55,14 +42,13 @@ class LeadDB(Base):
     msg        = Column(Text)
     category   = Column(String, default="warm")
     ai_summary = Column(Text)
-    source     = Column(String, default="form")   # form | agent
+    source     = Column(String, default="form")
 
 Base.metadata.create_all(bind=engine)
 
-# ── Auth / security ──────────────────────────────────────────────────────────
-pwd_ctx  = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+pwd_ctx  = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
-rate_limits: dict = defaultdict(list)
+rate_limits = defaultdict(list)
 
 def get_db():
     db = SessionLocal()
@@ -93,127 +79,89 @@ def check_rate_limit(req: Request):
         raise HTTPException(429, "Занадто багато запитів")
     rate_limits[ip].append(now)
 
-# ── Класифікатор лідів ───────────────────────────────────────────────────────
 HOT_KEYWORDS = [
     "хочу купити", "хочу придбати", "шукаю купити",
-    "планую купити", "розглядаю купівлю", "готовий купити",
-    "бюджет", "готовий платити", "є кошти",
+    "планую купити", "бюджет", "готовий платити",
     "скільки коштує", "ціна", "вартість", "прайс",
-    "терміново", "якнайшвидше", "цього року",
-    "навесні", "влітку", "до зими", "цьогоріч",
-    "модульний будинок", "модульний дім",
+    "терміново", "модульний будинок", "модульний дім",
     "збірний будинок", "будинок під ключ",
-    "напишіть", "зателефонуйте", "де купити",
-    "хто продає", "порадьте виробника",
     "купити", "придбати", "замовити", "high",
 ]
-
-WARM_KEYWORDS = [
-    "цікавить", "розглядаю", "думаю",
-    "може", "варіанти", "інформація",
-    "що краще", "порівняти", "medium",
-]
-
 COLD_KEYWORDS = [
-    "продаю", "здаю в оренду", "пропоную",
-    "потім", "колись", "не зараз",
-    "просто дивлюсь", "дізнатись", "low",
+    "продаю", "здаю", "пропоную", "потім",
+    "колись", "не зараз", "просто дивлюсь", "low",
 ]
 
-def classify_lead(product: str, msg: str) -> tuple[str, str]:
-    """Класифікує лід та генерує summary на основі ключових слів."""
+def classify_lead(product, msg):
     txt = (product + " " + msg).lower()
-
-    # Розумна перевірка: слова можуть стояти не поряд
-    def matches(keywords):
-        return any(k in txt for k in keywords)
-
-    if matches(HOT_KEYWORDS):
+    if any(k in txt for k in HOT_KEYWORDS):
         cat = "hot"
-    elif matches(COLD_KEYWORDS):
+    elif any(k in txt for k in COLD_KEYWORDS):
         cat = "cold"
     else:
         cat = "warm"
-
-    summary = f"Шукає: {product}. Коментар: {msg[:80]}{'...' if len(msg) > 80 else ''}"
+    summary = "Шукає: {}. Коментар: {}{}".format(
+        product, msg[:80], "..." if len(msg) > 80 else ""
+    )
     return cat, summary
-
-# ── FastAPI app ──────────────────────────────────────────────────────────────
-ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "*")
 
 app = FastAPI(title="Lead PRO AI", version="3.2.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[ALLOWED_ORIGIN],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
-# ── Pydantic моделі ──────────────────────────────────────────────────────────
 class LeadIn(BaseModel):
-    name:     str      = Field(..., min_length=2, max_length=100)
-    phone:    str      = Field(..., pattern=r"^\+?[0-9\s\-\(\)]{10,20}$")
+    name:     str
+    phone:    str
     email:    EmailStr
-    product:  str      = Field(..., min_length=3, max_length=100)
-    priority: str      = Field("medium", pattern="^(low|medium|high)$")
-    msg:      str      = Field(..., min_length=5, max_length=500)
-    source:   str      = Field("form")
-
-    @field_validator("name")
-    @classmethod
-    def fmt_name(cls, v):
-        return v.strip().title()
+    product:  str
+    priority: str = "medium"
+    msg:      str
+    source:   str = "form"
 
 class LoginIn(BaseModel):
     user:     str
     password: str
 
-# ── Telegram ─────────────────────────────────────────────────────────────────
-def notify(lid: str, name: str, product: str, phone: str,
-           cat: str, summary: str, source: str = "form"):
+def notify(lid, name, product, phone, cat, summary, source="form"):
     if not TG_TOKEN or not TG_CHAT:
         return
     icons   = {"hot": "\U0001F525", "warm": "\U0001F324", "cold": "\U0001F340"}
     src_ico = "\U0001F916" if source == "agent" else "\U0001F4F1"
     icon    = icons.get(cat, "\u26AA")
-    txt = (
-        f"{icon} #{lid} [{cat.upper()}] {src_ico}\n"
-        f"\U0001F464 {name}\n"
-        f"\U0001F4E6 {product}\n"
-        f"\U0001F4DD {summary}\n"
-        f"\U0001F4DE {phone}"
+    txt = "{} #{} [{}] {}\n\U0001F464 {}\n\U0001F4E6 {}\n\U0001F4DD {}\n\U0001F4DE {}".format(
+        icon, lid, cat.upper(), src_ico, name, product, summary, phone
     )
     try:
         r = requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            "https://api.telegram.org/bot{}/sendMessage".format(TG_TOKEN),
             json={"chat_id": TG_CHAT, "text": txt},
             timeout=5,
         )
         if r.status_code == 200:
-            log.info(f"✅ TG надіслано: {lid}")
+            log.info("TG надіслано: {}".format(lid))
         else:
-            log.warning(f"⚠️  TG помилка {r.status_code}: {r.text}")
+            log.warning("TG помилка {}: {}".format(r.status_code, r.text))
     except Exception as e:
-        log.error(f"TG exception: {e}")
-
-# ── Ендпоінти ────────────────────────────────────────────────────────────────
+        log.error("TG exception: {}".format(e))
 
 @app.post("/login")
 def login(d: LoginIn):
     if d.user != "admin":
         raise HTTPException(401, "Невірний користувач")
-    # БАГ ВИПРАВЛЕНО: прибрано захардкоджений пароль admin123
     if not ADMIN_HASH:
         raise HTTPException(500, "ADMIN_PASS_HASH не налаштовано")
     if not pwd_ctx.verify(d.password, ADMIN_HASH):
         raise HTTPException(401, "Невірний пароль")
     return {"token": make_token(), "type": "bearer"}
 
-
 @app.post("/leads", status_code=201)
 def create_lead(l: LeadIn, req: Request, db: Session = Depends(get_db)):
-    # БАГ ВИПРАВЛЕНО: rate limit тепер викликається
     check_rate_limit(req)
+    l.name = l.name.strip().title()
     lid = "LD-" + str(int(time.time() * 1000))
     cat, summary = classify_lead(l.product, l.msg)
     entry = LeadDB(
@@ -224,35 +172,18 @@ def create_lead(l: LeadIn, req: Request, db: Session = Depends(get_db)):
     db.add(entry)
     db.commit()
     notify(lid, l.name, l.product, l.phone, cat, summary, l.source)
-    # БАГ ВИПРАВЛЕНО: статус "accepted" як у README
     return {"id": lid, "status": "accepted", "category": cat, "ai_summary": summary}
 
-
-# БАГ ВИПРАВЛЕНО: /leads та /export/csv тепер захищені токеном
 @app.get("/leads")
-def list_leads(
-    skip: int = 0, limit: int = 20,
-    db: Session = Depends(get_db),
-    _=Depends(verify_token),
-):
-    items = (
-        db.query(LeadDB)
-        .order_by(LeadDB.created.desc())
-        .offset(skip).limit(limit)
-        .all()
-    )
+def list_leads(skip: int = 0, limit: int = 20,
+               db: Session = Depends(get_db), _=Depends(verify_token)):
+    items = db.query(LeadDB).order_by(LeadDB.created.desc()).offset(skip).limit(limit).all()
     return [
-        {
-            "id":       i.lid,
-            "name":     i.name,
-            "product":  i.product,
-            "category": i.category,
-            "source":   i.source,
-            "created":  i.created.isoformat() if i.created else None,
-        }
+        {"id": i.lid, "name": i.name, "product": i.product,
+         "category": i.category, "source": i.source,
+         "created": i.created.isoformat() if i.created else None}
         for i in items
     ]
-
 
 @app.get("/export/csv")
 def export_csv(db: Session = Depends(get_db), _=Depends(verify_token)):
@@ -262,18 +193,15 @@ def export_csv(db: Session = Depends(get_db), _=Depends(verify_token)):
     w.writerow(["ID", "Name", "Phone", "Email", "Product",
                 "Priority", "Category", "Source", "Summary", "Created"])
     for i in items:
-        w.writerow([
-            i.lid, i.name, i.phone, i.email, i.product,
-            i.priority, i.category, i.source, i.ai_summary,
-            i.created.isoformat() if i.created else "",
-        ])
+        w.writerow([i.lid, i.name, i.phone, i.email, i.product,
+                    i.priority, i.category, i.source, i.ai_summary,
+                    i.created.isoformat() if i.created else ""])
     out.seek(0)
     return StreamingResponse(
         iter([out.read()]),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=leads.csv"},
     )
-
 
 @app.get("/health")
 def health():
